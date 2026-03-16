@@ -1,0 +1,9 @@
+{
+  "id": "editable-view",
+  "name": "Editable View",
+  "version": "0.1.0",
+  "minAppVersion": "1.4.0",
+  "description": "Notion-like database table view for inline field-based notes.",
+  "author": "gytkk",
+  "isDesktopOnly": false
+}

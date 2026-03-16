@@ -1,0 +1,16 @@
+{
+  "name": "obsidian-plugins",
+  "private": true,
+  "version": "0.1.0",
+  "description": "Custom Obsidian plugins monorepo",
+  "scripts": {
+    "build": "for dir in plugins/*/; do echo \"Building $(basename $dir)...\" && (cd \"$dir\" && npm run build); done",
+    "build:editable-view": "cd plugins/editable-view && npm run build",
+    "build:event-inline-editor": "cd plugins/event-inline-editor && npm run build",
+    "build:todo-inline-editor": "cd plugins/todo-inline-editor && npm run build",
+    "deploy": "./deploy.sh",
+    "deploy:editable-view": "./deploy.sh editable-view",
+    "deploy:event-inline-editor": "./deploy.sh event-inline-editor",
+    "deploy:todo-inline-editor": "./deploy.sh todo-inline-editor"
+  }
+}
