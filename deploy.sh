@@ -19,7 +19,7 @@ deploy_plugin() {
 
   # Build
   echo "Building $plugin..."
-  (cd "$src" && npm run build)
+  (cd "$src" && bun run build)
 
   # Copy artifacts
   mkdir -p "$dest"
