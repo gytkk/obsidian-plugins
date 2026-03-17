@@ -129,6 +129,9 @@ async function loadRecords(app: App, source: string): Promise<FileRecord[]> {
     if (f instanceof TFile && f.extension === 'md') files.push(f);
   });
 
+  // Sort by creation time ascending so newest files appear last
+  files.sort((a, b) => a.stat.ctime - b.stat.ctime);
+
   // Read all files in parallel
   const records = await Promise.all(
     files.map(async (file) => {
@@ -263,6 +266,85 @@ class EditableViewRenderer {
     });
   }
 
+  /** Create a new markdown file in the source folder with empty inline fields */
+  private async createNewRecord(container: HTMLElement): Promise<void> {
+    const folder = this.app.vault.getAbstractFileByPath(this.config.source);
+    if (!folder || !(folder instanceof TFolder)) {
+      new Notice('editable-view: Source folder not found');
+      return;
+    }
+
+    // Generate unique file name
+    const baseName = 'Untitled';
+    let fileName = baseName;
+    let counter = 1;
+    while (this.app.vault.getAbstractFileByPath(`${this.config.source}/${fileName}.md`)) {
+      fileName = `${baseName} ${counter}`;
+      counter++;
+    }
+
+    // Build content with empty inline fields
+    const lines = this.config.fields.map((f) => `${f.name}:: `);
+    const content = lines.join('\n') + '\n';
+
+    const filePath = `${this.config.source}/${fileName}.md`;
+    await this.app.vault.create(filePath, content);
+  }
+
+  /** Delete a file (move to Obsidian trash) */
+  private async deleteRecord(record: FileRecord, container: HTMLElement): Promise<void> {
+    const file = this.app.vault.getAbstractFileByPath(record.filePath);
+    if (!file || !(file instanceof TFile)) return;
+
+    await this.app.vault.trash(file, false);
+  }
+
+  /** Inline-rename a file from the Name cell */
+  private editNameCell(td: HTMLElement, record: FileRecord, container: HTMLElement): void {
+    if (td.querySelector('input')) return;
+
+    const oldName = record.fileName;
+    td.empty();
+    const input = td.createEl('input', {
+      cls: 'ev-cell-input',
+      type: 'text',
+      value: oldName,
+    });
+    input.focus();
+    input.select();
+
+    const commit = async () => {
+      const newName = input.value.trim();
+      input.remove();
+
+      if (!newName || newName === oldName) {
+        this.render(container);
+        return;
+      }
+
+      const file = this.app.vault.getAbstractFileByPath(record.filePath);
+      if (!file || !(file instanceof TFile)) {
+        this.render(container);
+        return;
+      }
+
+      const newPath = record.filePath.replace(/[^/]+\.md$/, `${newName}.md`);
+      if (this.app.vault.getAbstractFileByPath(newPath)) {
+        new Notice(`"${newName}" already exists`);
+        this.render(container);
+        return;
+      }
+
+      await this.app.vault.rename(file, newPath);
+    };
+
+    input.addEventListener('blur', () => commit());
+    input.addEventListener('keydown', (e) => {
+      if (e.key === 'Enter') { e.preventDefault(); input.blur(); }
+      if (e.key === 'Escape') { input.value = oldName; input.blur(); }
+    });
+  }
+
   private getVisibleFields(): FieldConfig[] {
     // Build ordered list from state, filtering out removed fields and adding new ones
     const configNames = new Set(this.config.fields.map((f) => f.name));
@@ -373,7 +455,7 @@ class EditableViewRenderer {
 
     // Header
     const thead = table.createEl('thead');
-    const headerRow = thead.createEl('tr');
+    const headerRow = thead.createEl('tr', { cls: 'ev-header-row' });
 
     // Name column header
     const nameHeader = headerRow.createEl('th', { cls: 'ev-th ev-th-name' });
@@ -384,13 +466,16 @@ class EditableViewRenderer {
       this.renderSortableHeader(th, field.name, field.name, container);
     }
 
+    // Empty header for delete column
+    headerRow.createEl('th', { cls: 'ev-th ev-th-actions' });
+
     // Body
     const tbody = table.createEl('tbody');
     for (const record of sorted) {
       const tr = tbody.createEl('tr', { cls: 'ev-row' });
       tr.dataset['filePath'] = record.filePath;
 
-      // Name cell (file link)
+      // Name cell (file link, double-click to rename)
       const nameTd = tr.createEl('td', { cls: 'ev-td ev-td-name' });
       const link = nameTd.createEl('a', {
         cls: 'internal-link',
@@ -400,6 +485,11 @@ class EditableViewRenderer {
         e.preventDefault();
         this.app.workspace.openLinkText(record.filePath, '');
       });
+      nameTd.addEventListener('dblclick', (e) => {
+        e.preventDefault();
+        e.stopPropagation();
+        this.editNameCell(nameTd, record, container);
+      });
 
       // Field cells
       for (const field of visibleFields) {
@@ -407,7 +497,31 @@ class EditableViewRenderer {
         const value = record.fields[field.name] ?? '';
         this.renderCell(td, value, field, record, container);
       }
+
+      // Delete button cell
+      const actionsTd = tr.createEl('td', { cls: 'ev-td ev-td-actions' });
+      const deleteBtn = actionsTd.createEl('button', {
+        cls: 'ev-delete-btn',
+        text: '\u00D7',
+        attr: { 'aria-label': '삭제' },
+      });
+      deleteBtn.addEventListener('click', (e) => {
+        e.stopPropagation();
+        this.deleteRecord(record, container);
+      });
     }
+
+    // Add row button
+    const addRow = tbody.createEl('tr', { cls: 'ev-row ev-add-row' });
+    const addTd = addRow.createEl('td', {
+      cls: 'ev-td ev-add-row-cell',
+      attr: { colspan: String(visibleFields.length + 2) },
+    });
+    const addBtn = addTd.createEl('button', { cls: 'ev-add-row-btn', text: '+ New' });
+    addBtn.addEventListener('click', (e) => {
+      e.preventDefault();
+      this.createNewRecord(container);
+    });
 
     container.scrollTop = scrollTop;
   }
