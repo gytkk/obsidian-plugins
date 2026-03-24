@@ -25,11 +25,13 @@ interface Task {
 interface Dropdown {
   element: HTMLDivElement;
   getValue: () => string;
+  focusAndOpen: () => void;
 }
 
 interface TimeRow {
   element: HTMLDivElement;
   getTime: () => string;
+  focusHour: () => void;
 }
 
 // ─── Helpers ────────────────────────────────────────────────
@@ -370,7 +372,12 @@ class EventRenderer {
       }
     });
 
-    const createDropdown = (options: string[], current: string, placeholder: string): Dropdown => {
+    const createDropdown = (
+      options: string[],
+      current: string,
+      placeholder: string,
+      onAutoConfirm?: () => void,
+    ): Dropdown => {
       const wrapper = document.createElement('div');
       wrapper.className = 'event-inline-dropdown';
       let value = current;
@@ -384,6 +391,30 @@ class EventRenderer {
       const menu = document.createElement('div');
       menu.className = 'event-inline-dropdown-menu';
       let selectedEl: HTMLElement | null = null;
+      const itemEls: HTMLElement[] = [];
+
+      const selectItem = (opt: string, itemEl: HTMLElement) => {
+        value = opt;
+        trigger.textContent = opt;
+        trigger.classList.remove('is-placeholder');
+        menu.querySelector('.is-selected')?.classList.remove('is-selected');
+        itemEl.classList.add('is-selected');
+        selectedEl = itemEl;
+      };
+
+      const scrollToSelected = () => {
+        if (selectedEl) {
+          menu.scrollTop = selectedEl.offsetTop - menu.offsetHeight / 2 + selectedEl.offsetHeight / 2;
+        }
+      };
+
+      const openMenu = () => {
+        for (const el of popup.querySelectorAll('.event-inline-dropdown-menu.is-open')) {
+          if (el !== menu) el.classList.remove('is-open');
+        }
+        menu.classList.add('is-open');
+        scrollToSelected();
+      };
 
       for (const opt of options) {
         const item = document.createElement('div');
@@ -395,14 +426,10 @@ class EventRenderer {
         }
         item.addEventListener('click', (e) => {
           e.stopPropagation();
-          value = opt;
-          trigger.textContent = opt;
-          trigger.classList.remove('is-placeholder');
-          menu.querySelector('.is-selected')?.classList.remove('is-selected');
-          item.classList.add('is-selected');
-          selectedEl = item;
+          selectItem(opt, item);
           menu.classList.remove('is-open');
         });
+        itemEls.push(item);
         menu.appendChild(item);
       }
 
@@ -410,23 +437,83 @@ class EventRenderer {
 
       trigger.addEventListener('click', (e) => {
         e.stopPropagation();
-        for (const el of popup.querySelectorAll('.event-inline-dropdown-menu.is-open')) {
-          if (el !== menu) el.classList.remove('is-open');
+        if (menu.classList.contains('is-open')) {
+          menu.classList.remove('is-open');
+        } else {
+          openMenu();
         }
-        const wasOpen = menu.classList.contains('is-open');
-        menu.classList.toggle('is-open');
-        if (!wasOpen && selectedEl) {
-          menu.scrollTop = selectedEl.offsetTop - menu.offsetHeight / 2 + selectedEl.offsetHeight / 2;
+      });
+
+      // Keyboard: type-ahead & navigation
+      let typeBuffer = '';
+      let typeTimer: ReturnType<typeof setTimeout> | null = null;
+
+      trigger.addEventListener('keydown', (e) => {
+        if (/^\d$/.test(e.key)) {
+          e.preventDefault();
+          e.stopPropagation();
+          if (!menu.classList.contains('is-open')) openMenu();
+
+          typeBuffer += e.key;
+          if (typeTimer) clearTimeout(typeTimer);
+          typeTimer = setTimeout(() => { typeBuffer = ''; }, 1000);
+
+          let matches = options.filter(o => o.startsWith(typeBuffer));
+          if (matches.length === 0 && typeBuffer.length === 1) {
+            typeBuffer = '0' + typeBuffer;
+            matches = options.filter(o => o.startsWith(typeBuffer));
+          }
+          if (matches.length === 0) { typeBuffer = ''; return; }
+
+          const matchOpt = matches[0]!;
+          selectItem(matchOpt, itemEls[options.indexOf(matchOpt)]!);
+          scrollToSelected();
+
+          if (matches.length === 1) {
+            menu.classList.remove('is-open');
+            typeBuffer = '';
+            if (typeTimer) clearTimeout(typeTimer);
+            onAutoConfirm?.();
+          }
+        } else if (e.key === 'ArrowDown' || e.key === 'ArrowUp') {
+          e.preventDefault();
+          e.stopPropagation();
+          if (!menu.classList.contains('is-open')) { openMenu(); return; }
+          const curIdx = selectedEl ? itemEls.indexOf(selectedEl) : -1;
+          const nextIdx = e.key === 'ArrowDown'
+            ? (curIdx < itemEls.length - 1 ? curIdx + 1 : 0)
+            : (curIdx > 0 ? curIdx - 1 : itemEls.length - 1);
+          selectItem(options[nextIdx]!, itemEls[nextIdx]!);
+          scrollToSelected();
+        } else if (e.key === 'Enter') {
+          if (menu.classList.contains('is-open')) {
+            e.preventDefault();
+            e.stopPropagation();
+            menu.classList.remove('is-open');
+            typeBuffer = '';
+            if (typeTimer) clearTimeout(typeTimer);
+            onAutoConfirm?.();
+          }
+        } else if (e.key === 'Escape') {
+          e.preventDefault();
+          e.stopPropagation();
+          menu.classList.remove('is-open');
+          typeBuffer = '';
         }
       });
 
       return {
         element: wrapper,
         getValue: () => value,
+        focusAndOpen: () => { trigger.focus(); openMenu(); },
       };
     };
 
-    const createTimeRow = (label: string, currentTime: string | undefined): TimeRow => {
+    const createTimeRow = (
+      label: string,
+      currentTime: string | undefined,
+      onRowConfirm?: () => void,
+    ): TimeRow => {
       const cur = parseTime(currentTime);
       const rowEl = document.createElement('div');
       rowEl.className = 'event-inline-time-row';
@@ -436,7 +523,11 @@ class EventRenderer {
       lbl.textContent = label;
       rowEl.appendChild(lbl);
 
-      const hourDd = createDropdown(hours, cur.h, '--');
+      const minRef: { focusAndOpen?: () => void } = {};
+
+      const hourDd = createDropdown(hours, cur.h, '--', () => {
+        minRef.focusAndOpen?.();
+      });
       rowEl.appendChild(hourDd.element);
 
       const colon = document.createElement('span');
@@ -444,7 +535,8 @@ class EventRenderer {
       colon.textContent = ':';
       rowEl.appendChild(colon);
 
-      const minDd = createDropdown(mins, cur.m, '--');
+      const minDd = createDropdown(mins, cur.m, '--', onRowConfirm);
+      minRef.focusAndOpen = minDd.focusAndOpen;
       rowEl.appendChild(minDd.element);
 
       return {
@@ -454,15 +546,28 @@ class EventRenderer {
           if (!hv) return '';
           return `${hv}:${minDd.getValue() || '00'}`;
         },
+        focusHour: () => hourDd.focusAndOpen(),
       };
     };
 
-    const startRow = createTimeRow('\uC2DC\uC791', task.fields['start']);
-    const endRow = createTimeRow('\uC885\uB8CC', task.fields['end']);
+    const startRow = createTimeRow('시작', task.fields['start']);
+    const endRow = createTimeRow('종료', task.fields['end']);
     popup.appendChild(startRow.element);
     popup.appendChild(endRow.element);
 
     let closeHandler: ((ev: MouseEvent) => void) | null = null;
+    let keyHandler: ((ev: KeyboardEvent) => void) | null = null;
+
+    const saveAndClose = () => {
+      const newStart = startRow.getTime();
+      const newEnd = endRow.getTime();
+      popup.remove();
+      if (closeHandler) document.removeEventListener('click', closeHandler);
+      if (keyHandler) document.removeEventListener('keydown', keyHandler);
+      if (newStart !== (task.fields['start'] ?? '') || newEnd !== (task.fields['end'] ?? '')) {
+        this.updateEventTime(task, newStart, newEnd);
+      }
+    };
 
     const clearBtn = document.createElement('button');
     clearBtn.className = 'event-inline-time-clear';
@@ -471,6 +576,7 @@ class EventRenderer {
       e.stopPropagation();
       popup.remove();
       if (closeHandler) document.removeEventListener('click', closeHandler);
+      if (keyHandler) document.removeEventListener('keydown', keyHandler);
       this.updateEventTime(task, '', '');
     });
     popup.appendChild(clearBtn);
@@ -481,20 +587,22 @@ class EventRenderer {
     popup.style.top = `${rect.bottom + 4}px`;
     popup.style.left = `${Math.max(0, rect.right - popup.offsetWidth)}px`;
 
-    // Close on outside click
+    // Auto-focus start hour dropdown
+    requestAnimationFrame(() => startRow.focusHour());
+
+    // Close on outside click or Enter key
     setTimeout(() => {
       closeHandler = (ev: MouseEvent) => {
-        if (!popup.contains(ev.target as Node)) {
-          const newStart = startRow.getTime();
-          const newEnd = endRow.getTime();
-          popup.remove();
-          document.removeEventListener('click', closeHandler!);
-          if (newStart !== (task.fields['start'] ?? '') || newEnd !== (task.fields['end'] ?? '')) {
-            this.updateEventTime(task, newStart, newEnd);
-          }
+        if (!popup.contains(ev.target as Node)) saveAndClose();
+      };
+      keyHandler = (ev: KeyboardEvent) => {
+        if (ev.key === 'Enter' && !popup.querySelector('.event-inline-dropdown-menu.is-open')) {
+          ev.preventDefault();
+          saveAndClose();
         }
       };
       document.addEventListener('click', closeHandler);
+      document.addEventListener('keydown', keyHandler);
     }, 0);
   }
 
